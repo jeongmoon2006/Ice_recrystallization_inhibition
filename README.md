@@ -1,6 +1,6 @@
 # Ice Recrystallization Inhibition (IRI) Analysis Code
 
-This repository contains numerical simulation tools for analyzing **Ice Recrystallization Inhibition (IRI)** and **Antifreeze Protein (AFP)** dimerization, developed as part of Ph.D. research at the **University of Pennsylvania**.
+This repository contains numerical simulation tools for analyzing **Ice Recrystallization Inhibition (IRI)** of **Antifreeze Protein (AFP)**, developed as part of Ph.D. research at the **University of Pennsylvania**.
 
 ## 🔬 Research Background
 The code simulates the evolution of ice particle size distribution (PSD) over time, considering the governing equations for particle growth and conservation of bulk concentration.
@@ -19,3 +19,4 @@ The code simulates the evolution of ice particle size distribution (PSD) over ti
 ```python
 from iri_model import time_integration
 # Define your parameters and run the simulation
+results = run_simulation(f_init, params, time_arr)
