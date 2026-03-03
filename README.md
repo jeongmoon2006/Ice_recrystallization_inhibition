@@ -11,13 +11,8 @@ Minimal model for ice recrystallization with **two critical radii**:
 - `requirements.txt`: pip dependency list.
 
 ## Quick start
-### pip/venv
-1. `python -m venv .venv`
-2. `# Windows: .venv\Scripts\activate`
-3. `pip install -r requirements.txt`
-4. `jupyter notebook`
-
-Then open `IRI_ODE.ipynb` and run all cells.
+1. `pip install -r requirements.txt`
+2. Then open `IRI_ODE.ipynb` and run all cells.
 
 ## API (core)
 - `critical_radii(c_bulk, params)` → `(R_melt, R_freeze)`
