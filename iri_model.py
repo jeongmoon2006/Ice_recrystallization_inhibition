@@ -8,6 +8,25 @@ def _safe_radius(radius):
     return np.maximum(np.asarray(radius, dtype=float), 1e-12)
 
 
+def _velocity_time_scale(params):
+    """Return scale factor to convert velocities from µm/s to requested time unit.
+
+    Model equations naturally yield dR/dt in µm/s when:
+    - D: µm^2/s
+    - R: µm
+    - rho_ice: number/µm^3
+    - c terms: number/µm^3
+
+    If params['time_unit'] == 'ms', divide by 1000 to get µm/ms.
+    """
+    time_unit = str(params.get("time_unit", "s")).lower()
+    if time_unit == "s":
+        return 1.0
+    if time_unit == "ms":
+        return 1000.0
+    raise ValueError("params['time_unit'] must be either 's' or 'ms'.")
+
+
 def critical_radii(c_bulk, params):
     """Return (R_melt, R_freeze) for the two-threshold model.
 
@@ -44,7 +63,8 @@ def get_growth_velocity(R, c_bulk, params, mode="single"):
     k_m = params.get("k_m", params.get("k2", 0.0))
     invL2 = params["invL2"]
 
-    prefactor = D / (radius * rho_ice) / 1000.0
+    time_scale = _velocity_time_scale(params)
+    prefactor = D / (radius * rho_ice) / time_scale
     v_melt = prefactor * (c_bulk - c_flat - alpha / radius + k_m * invL2)
 
     if mode == "single":
@@ -77,7 +97,18 @@ def ode_system(t, y, R, params, mode):
 
 
 def run_simulation(f_init, c_bulk_init, R, t_span, params, mode="double", t_eval=None):
-    """Run IRI PSD simulation with a stiff solver."""
+    """Run IRI PSD simulation with a stiff solver.
+
+    Units (recommended):
+    - R in µm
+    - f(R) in 1/µm^4
+    - time in seconds if params['time_unit'] is omitted or set to 's'
+    - c_bulk, c_flat in number/µm^3
+    - alpha in number/µm^2
+    - D in µm^2/s
+    - invL2 in 1/µm
+    - k_f, k_m in number/µm^2 (so k_*invL2 is number/µm^3)
+    """
     radius = np.asarray(R, dtype=float)
     f_init = np.asarray(f_init, dtype=float)
 

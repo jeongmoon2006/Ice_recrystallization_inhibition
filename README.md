@@ -19,3 +19,14 @@ Minimal model for ice recrystallization with **two critical radii**:
 - `run_simulation(f_init, c_bulk_init, R, t_span, params, mode="double", t_eval=None)`
 
 `mode="double"` enables the two-threshold IRI mechanism.
+
+## Units (important)
+- Radius `R`: `µm`
+- PSD `f(R)`: `1/µm^4`
+- Time: set by `params["time_unit"]` (`"s"` default, or `"ms"`)
+- `D`: `µm^2/s`
+- `rho_ice`: `number/µm^3`
+- `c_bulk`, `c_flat`: `number/µm^3`
+- `alpha`: `number/µm^2`
+- `invL2`: `1/µm`
+- `k1`, `k2` (or `k_f`, `k_m`): `number/µm^2`
