@@ -23,10 +23,10 @@ Minimal model for ice recrystallization with **two critical radii**:
 ## Units (important)
 - Radius `R`: `µm`
 - PSD `f(R)`: `1/µm^4`
-- Time: set by `params["time_unit"]` (`"s"` default, or `"ms"`)
+- Time: set by `params["time_unit"]` (`"ms"` default, or `"s"`)
 - `D`: `µm^2/s`
 - `rho_ice`: `number/µm^3`
 - `c_bulk`, `c_flat`: `number/µm^3`
 - `alpha`: `number/µm^2`
-- `invL2`: `1/µm`
-- `k1`, `k2` (or `k_f`, `k_m`): `number/µm^2`
+- `invL2`: `1/µm^2`
+- `k1`, `k2` (or `k_f`, `k_m`): `number/µm`
