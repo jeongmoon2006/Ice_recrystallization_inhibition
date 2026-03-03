@@ -11,17 +11,17 @@ def _safe_radius(radius):
 def critical_radii(c_bulk, params):
     """Return (R_melt, R_freeze) for the two-threshold model.
 
-    R_melt  = alpha / (c_bulk - c_flat - k1/L^2)
-    R_freeze = alpha / (c_bulk - c_flat + k2/L^2)
+    R_freeze = alpha / (c_bulk - c_flat - k_f/L^2)
+    R_melt   = alpha / (c_bulk - c_flat + k_m/L^2)
     """
     c_flat = params["c_flat"]
     alpha = params["alpha"]
-    k1 = params.get("k1", params.get("k", 0.0))
-    k2 = params.get("k2", 0.0)
+    k_f = params.get("k_f", params.get("k1", params.get("k", 0.0)))
+    k_m = params.get("k_m", params.get("k2", 0.0))
     invL2 = params["invL2"]
 
-    denom_melt = c_bulk - c_flat - k1 * invL2
-    denom_freeze = c_bulk - c_flat + k2 * invL2
+    denom_freeze = c_bulk - c_flat - k_f * invL2
+    denom_melt = c_bulk - c_flat + k_m * invL2
 
     r_melt = np.inf if denom_melt <= 0 else alpha / denom_melt
     r_freeze = np.inf if denom_freeze <= 0 else alpha / denom_freeze
@@ -40,12 +40,12 @@ def get_growth_velocity(R, c_bulk, params, mode="single"):
     rho_ice = params["rho_ice"]
     c_flat = params["c_flat"]
     alpha = params["alpha"]
-    k1 = params.get("k1", params.get("k", 0.0))
-    k2 = params.get("k2", 0.0)
+    k_f = params.get("k_f", params.get("k1", params.get("k", 0.0)))
+    k_m = params.get("k_m", params.get("k2", 0.0))
     invL2 = params["invL2"]
 
     prefactor = D / (radius * rho_ice) / 1000.0
-    v_melt = prefactor * (c_bulk - c_flat - alpha / radius - k1 * invL2)
+    v_melt = prefactor * (c_bulk - c_flat - alpha / radius + k_m * invL2)
 
     if mode == "single":
         return v_melt
@@ -53,7 +53,7 @@ def get_growth_velocity(R, c_bulk, params, mode="single"):
     if mode != "double":
         raise ValueError("mode must be 'single' or 'double'.")
 
-    v_freeze = prefactor * (c_bulk - c_flat - alpha / radius + k2 * invL2)
+    v_freeze = prefactor * (c_bulk - c_flat - alpha / radius - k_f * invL2)
     r_melt, r_freeze = critical_radii(c_bulk, params)
 
     in_melt_region = radius > r_melt
