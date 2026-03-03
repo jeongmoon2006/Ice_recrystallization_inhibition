@@ -1,22 +1,32 @@
-# Ice Recrystallization Inhibition (IRI) Analysis Code
+# Ice Recrystallization Inhibition (IRI)
 
-This repository contains numerical simulation tools for analyzing **Ice Recrystallization Inhibition (IRI)** of **Antifreeze Protein (AFP)**, developed as part of Ph.D. research at the **University of Pennsylvania**.
+Minimal model for ice recrystallization with **two critical radii**:
+- melting critical radius,
+- freezing critical radius,
+- stay region between them where growth velocity is zero.
 
-## 🔬 Research Background
-The code simulates the evolution of ice particle size distribution (PSD) over time, considering the governing equations for particle growth and conservation of bulk concentration.
+## Files
+- `iri_model.py`: core ODE model (`run_simulation`, `critical_radii`).
+- `IRI_ODE.ipynb`: example notebook with initial configuration and plotting.
+- `requirements.txt`: pip dependency list.
+- `environment.yml`: Conda environment specification.
 
-### Key Features
-* **Particle Growth Simulation:** Implementation of $v_R$ equations considering curvature and AFP-related parameters ($L$, $k$).
-* **Dimerization Analysis:** Tools to calculate binding free energy and its impact on dimerization.
-* **Visualization:** Generation of PDF evolution plots and animated GIFs (Lifshitz-Slyozov-Wagner theory analysis).
+## Quick start
+### Option A: Conda (recommended if you use Anaconda)
+1. `conda env create -f environment.yml`
+2. `conda activate iri-afp`
+3. `jupyter notebook`
 
-## 📂 Structure
-- `iri_model.py`: Core numerical integration and governing equations.
-- `2CR_D.ipynb`: Analysis of two critical radii and ice crystal growth inhibition.
-- `SBW/`: Subfolder for specific simulation batches.
+### Option B: pip/venv
+1. `python -m venv .venv`
+2. `# Windows: .venv\Scripts\activate`
+3. `pip install -r requirements.txt`
+4. `jupyter notebook`
 
-## 🚀 Getting Started
-```python
-from iri_model import time_integration
-# Define your parameters and run the simulation
-results = run_simulation(f_init, params, time_arr)
+Then open `IRI_ODE.ipynb` and run all cells.
+
+## API (core)
+- `critical_radii(c_bulk, params)` → `(R_melt, R_freeze)`
+- `run_simulation(f_init, c_bulk_init, R, t_span, params, mode="double", t_eval=None)`
+
+`mode="double"` enables the two-threshold IRI mechanism.
