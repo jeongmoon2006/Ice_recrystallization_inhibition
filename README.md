@@ -9,15 +9,9 @@ Minimal model for ice recrystallization with **two critical radii**:
 - `iri_model.py`: core ODE model (`run_simulation`, `critical_radii`).
 - `IRI_ODE.ipynb`: example notebook with initial configuration and plotting.
 - `requirements.txt`: pip dependency list.
-- `environment.yml`: Conda environment specification.
 
 ## Quick start
-### Option A: Conda (recommended if you use Anaconda)
-1. `conda env create -f environment.yml`
-2. `conda activate iri-afp`
-3. `jupyter notebook`
-
-### Option B: pip/venv
+### pip/venv
 1. `python -m venv .venv`
 2. `# Windows: .venv\Scripts\activate`
 3. `pip install -r requirements.txt`
