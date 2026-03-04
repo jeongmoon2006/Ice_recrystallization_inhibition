@@ -93,7 +93,12 @@ def get_growth_velocity(R, c_bulk, params, mode="single"):
     """Compute dR/dt over radius grid R.
 
     `single`: one-threshold (LSW-like) dynamics.
-    `double`: two thresholds with a stay region where velocity is zero.
+        `double`: two thresholds with a stay region where velocity is zero.
+
+        Optional smoothing for `double` mode:
+        - params['switch_width'] in µm (default 0.0) controls smooth blending
+            near critical radii.
+        - switch_width <= 0 keeps the original hard piecewise switching.
     """
     radius = _safe_radius(R)
 
@@ -121,28 +126,25 @@ def get_growth_velocity(R, c_bulk, params, mode="single"):
     v_large_r = prefactor * (c_bulk - c_flat - alpha / radius - k_f * invL2)
     r_melt, r_freeze = critical_radii(c_bulk, params)
 
-    # --- [Integration point: smoothing logic] ---
-    # Check whether smoothing is enabled in params (accepts True, "yes", "y", etc.)
-    is_smooth = str(params.get("smooth", True )).lower() in ["true", "yes", "y"]
+    # Keep a true three-region piecewise structure:
+    #   R < r_melt   -> +k_m branch (small-radius branch)
+    #   r_melt <= R <= r_freeze -> stay region (v = 0)
+    #   R > r_freeze -> -k_f branch (large-radius branch)
+    # This mirrors the legacy notebook logic and preserves a finite stay window
+    # whenever r_melt < r_freeze.
+    switch_width = float(params.get("switch_width", 0.0))
 
-    if is_smooth:
-        # Guard against delta_r == 0 to avoid numerical issues
-        delta_r = max(float(params.get("smoothing_width", 0.5)), 1e-10)
-
-        # Smooth transition weights using hyperbolic tangent
-        # Active for radii below r_melt
-        weight_melt = 0.5 * (1 - np.tanh((radius - r_melt) / delta_r))
-        # Active for radii above r_freeze
-        weight_freeze = 0.5 * (1 + np.tanh((radius - r_freeze) / delta_r))
-        
-        # Blend velocities by weights (naturally tends toward 0 in the stay region)
-        return (weight_melt * v_small_r) + (weight_freeze * v_large_r)
-    
-    else:
-        # Original sharp piecewise selection
+    if switch_width <= 0.0:
         in_large_r_region = radius > r_freeze
         in_small_r_region = radius < r_melt
         return np.select([in_large_r_region, in_small_r_region], [v_large_r, v_small_r], default=0.0)
+
+    eps = max(switch_width, 1e-12)
+    w_small = 0.5 * (1.0 - np.tanh((radius - r_melt) / eps))
+    w_large = 0.5 * (1.0 + np.tanh((radius - r_freeze) / eps))
+    w_stay = np.clip(1.0 - w_small - w_large, 0.0, 1.0)
+
+    return w_small * v_small_r + w_large * v_large_r + w_stay * 0.0
 
 
 def ode_system(t, y, R, params, mode):
@@ -177,7 +179,19 @@ def ode_system(t, y, R, params, mode):
     return np.concatenate([df_dt, [dc_bulk_dt]])
 
 
-def run_simulation(f_init, c_bulk_init, R, t_span, params, mode="double", t_eval=None):
+def run_simulation(
+    f_init,
+    c_bulk_init,
+    R,
+    t_span,
+    params,
+    mode="double",
+    t_eval=None,
+    rtol=1e-6,
+    atol=1e-9,
+    max_step=np.inf,
+    method="BDF",
+):
     """Run IRI PSD simulation with a stiff solver.
 
     Units (recommended):
@@ -189,6 +203,12 @@ def run_simulation(f_init, c_bulk_init, R, t_span, params, mode="double", t_eval
     - D in µm^2/s
     - invL2 in 1/µm^2
     - k_f, k_m in number/µm (so k_*invL2 is number/µm^3)
+
+    Solver controls:
+    - method: any scipy.integrate.solve_ivp method (e.g., 'BDF', 'Radau', 'LSODA')
+    - rtol: relative tolerance
+    - atol: absolute tolerance
+    - max_step: maximum internal time step (same unit as t_span)
     """
     radius = np.asarray(R, dtype=float)
     f_init = np.asarray(f_init, dtype=float)
@@ -211,4 +231,5 @@ def run_simulation(f_init, c_bulk_init, R, t_span, params, mode="double", t_eval
         method=method,
         rtol=rtol,
         atol=atol,
+        max_step=max_step,
     )
