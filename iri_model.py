@@ -2,6 +2,7 @@
 
 import numpy as np
 from scipy.integrate import simpson, solve_ivp
+from types import SimpleNamespace
 
 
 def _safe_radius(radius):
@@ -191,6 +192,8 @@ def run_simulation(
     atol=1e-9,
     max_step=np.inf,
     method="BDF",
+    show_progress=False,
+    progress_chunks=40,
 ):
     """Run IRI PSD simulation with a stiff solver.
 
@@ -222,14 +225,102 @@ def run_simulation(
     rtol = float(params.get("solver_rtol", 1e-4))
     atol = float(params.get("solver_atol", 1e-7))
 
-    return solve_ivp(
-        fun=ode_system,
-        t_span=t_span,
-        y0=y0,
-        args=(radius, params, mode),
-        t_eval=t_eval,
-        method=method,
-        rtol=rtol,
-        atol=atol,
-        max_step=max_step,
+    if not show_progress:
+        return solve_ivp(
+            fun=ode_system,
+            t_span=t_span,
+            y0=y0,
+            args=(radius, params, mode),
+            t_eval=t_eval,
+            method=method,
+            rtol=rtol,
+            atol=atol,
+            max_step=max_step,
+        )
+
+    t0, tf = float(t_span[0]), float(t_span[1])
+    if tf <= t0:
+        raise ValueError("t_span must satisfy t_span[1] > t_span[0].")
+
+    n_chunks = max(1, int(progress_chunks))
+    chunk_edges = np.linspace(t0, tf, n_chunks + 1)
+
+    if t_eval is not None:
+        t_eval = np.asarray(t_eval, dtype=float)
+        if t_eval.ndim != 1:
+            raise ValueError("t_eval must be one-dimensional when provided.")
+
+    t_parts = []
+    y_parts = []
+    current_y = y0
+    success = True
+    message = "The solver successfully reached the end of the integration interval."
+    status = 0
+    nfev_total = njev_total = nlu_total = 0
+
+    print("Simulation progress: 0%", end="\r")
+    for idx in range(n_chunks):
+        left = chunk_edges[idx]
+        right = chunk_edges[idx + 1]
+
+        if t_eval is None:
+            t_eval_chunk = None
+        else:
+            if idx == 0:
+                mask = (t_eval >= left) & (t_eval <= right)
+            else:
+                mask = (t_eval > left) & (t_eval <= right)
+            t_eval_chunk = t_eval[mask]
+            if t_eval_chunk.size == 0:
+                t_eval_chunk = None
+
+        sol_chunk = solve_ivp(
+            fun=ode_system,
+            t_span=(left, right),
+            y0=current_y,
+            args=(radius, params, mode),
+            t_eval=t_eval_chunk,
+            method=method,
+            rtol=rtol,
+            atol=atol,
+            max_step=max_step,
+        )
+
+        nfev_total += int(getattr(sol_chunk, "nfev", 0))
+        njev_total += int(getattr(sol_chunk, "njev", 0))
+        nlu_total += int(getattr(sol_chunk, "nlu", 0))
+
+        if not sol_chunk.success:
+            success = False
+            message = sol_chunk.message
+            status = sol_chunk.status
+            break
+
+        current_y = sol_chunk.y[:, -1]
+
+        if sol_chunk.t.size > 0:
+            t_parts.append(sol_chunk.t)
+            y_parts.append(sol_chunk.y)
+
+        pct = int(round((idx + 1) * 100.0 / n_chunks))
+        print(f"Simulation progress: {pct}%", end="\r")
+
+    print("Simulation progress: 100%")
+
+    if len(t_parts) == 0:
+        t_out = np.array([t0])
+        y_out = y0[:, None]
+    else:
+        t_out = np.concatenate(t_parts)
+        y_out = np.hstack(y_parts)
+
+    return SimpleNamespace(
+        t=t_out,
+        y=y_out,
+        success=success,
+        message=message,
+        status=status,
+        nfev=nfev_total,
+        njev=njev_total,
+        nlu=nlu_total,
     )
