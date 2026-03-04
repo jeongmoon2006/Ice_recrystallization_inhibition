@@ -2,6 +2,7 @@
 
 import numpy as np
 from scipy.integrate import simpson, solve_ivp
+from types import SimpleNamespace
 
 
 def _safe_radius(radius):
@@ -25,6 +26,42 @@ def _velocity_time_scale(params):
     if time_unit == "ms":
         return 1000.0
     raise ValueError("params['time_unit'] must be either 'ms' or 's'.")
+
+
+def _flux_divergence_upwind(f, v_r, radius):
+    """Return d(f*v)/dR using first-order upwind finite-volume fluxes.
+
+    Boundary condition is "open" with zero inflow:
+    - Left boundary (smallest R): if v>0 (inflow), flux=0; if v<0 (outflow), flux=v*f.
+    - Right boundary (largest R): if v<0 (inflow), flux=0; if v>0 (outflow), flux=v*f.
+    """
+    f = np.asarray(f, dtype=float)
+    v_r = np.asarray(v_r, dtype=float)
+    radius = np.asarray(radius, dtype=float)
+
+    n = len(radius)
+    if n < 2:
+        return np.zeros_like(f)
+
+    face_flux = np.zeros(n + 1, dtype=float)
+
+    left_v = v_r[0]
+    right_v = v_r[-1]
+    face_flux[0] = left_v * f[0] if left_v < 0.0 else 0.0
+    face_flux[-1] = right_v * f[-1] if right_v > 0.0 else 0.0
+
+    face_velocity = 0.5 * (v_r[:-1] + v_r[1:])
+    upwind_left = np.where(face_velocity >= 0.0, f[:-1], f[1:])
+    face_flux[1:n] = face_velocity * upwind_left
+
+    cell_width = np.empty(n, dtype=float)
+    cell_width[0] = radius[1] - radius[0]
+    cell_width[-1] = radius[-1] - radius[-2]
+    if n > 2:
+        cell_width[1:-1] = 0.5 * (radius[2:] - radius[:-2])
+    cell_width = np.maximum(cell_width, 1e-12)
+
+    return (face_flux[1:] - face_flux[:-1]) / cell_width
 
 
 def critical_radii(c_bulk, params):
@@ -76,6 +113,8 @@ def get_growth_velocity(R, c_bulk, params, mode="single"):
 
     time_scale = _velocity_time_scale(params)
     prefactor = D / (radius * rho_ice) / time_scale
+    
+    # Compute the baseline physical branch
     v_small_r = prefactor * (c_bulk - c_flat - alpha / radius + k_m * invL2)
 
     if mode == "single":
@@ -84,6 +123,7 @@ def get_growth_velocity(R, c_bulk, params, mode="single"):
     if mode != "double":
         raise ValueError("mode must be 'single' or 'double'.")
 
+    # Compute second branch and critical radii for double mode
     v_large_r = prefactor * (c_bulk - c_flat - alpha / radius - k_f * invL2)
     r_melt, r_freeze = critical_radii(c_bulk, params)
 
@@ -113,11 +153,29 @@ def ode_system(t, y, R, params, mode):
     f = y[:-1]
     c_bulk = y[-1]
     rho_ice = params["rho_ice"]
+    grad_edge_order = int(params.get("gradient_edge_order", 1))
+    use_simpson = bool(params.get("use_simpson_integral", False))
+    flux_scheme = str(params.get("flux_scheme", "upwind")).lower()
+    enforce_nonnegative_f = bool(params.get("enforce_nonnegative_f", True))
 
     v_r = get_growth_velocity(R, c_bulk, params, mode=mode)
     flux = f * v_r
-    df_dt = -np.gradient(flux, R, edge_order=2)
-    dc_bulk_dt = -4.0 * np.pi * rho_ice * simpson(y=R * R * v_r * f, x=R)
+    if flux_scheme == "upwind":
+        df_dt = -_flux_divergence_upwind(f=f, v_r=v_r, radius=R)
+    elif flux_scheme == "gradient":
+        df_dt = -np.gradient(flux, R, edge_order=grad_edge_order)
+    else:
+        raise ValueError("params['flux_scheme'] must be 'upwind' or 'gradient'.")
+
+    if enforce_nonnegative_f:
+        df_dt = np.where((f <= 0.0) & (df_dt < 0.0), 0.0, df_dt)
+
+    integrand = R * R * v_r * f
+    if use_simpson:
+        integral_val = simpson(y=integrand, x=R)
+    else:
+        integral_val = np.trapezoid(integrand, R)
+    dc_bulk_dt = -4.0 * np.pi * rho_ice * integral_val
 
     return np.concatenate([df_dt, [dc_bulk_dt]])
 
@@ -134,6 +192,8 @@ def run_simulation(
     atol=1e-9,
     max_step=np.inf,
     method="BDF",
+    show_progress=False,
+    progress_chunks=40,
 ):
     """Run IRI PSD simulation with a stiff solver.
 
@@ -161,14 +221,106 @@ def run_simulation(
 
     y0 = np.concatenate([f_init, [float(c_bulk_init)]])
 
-    return solve_ivp(
-        fun=ode_system,
-        t_span=t_span,
-        y0=y0,
-        args=(radius, params, mode),
-        t_eval=t_eval,
-        method=method,
-        rtol=rtol,
-        atol=atol,
-        max_step=max_step,
+    method = params.get("solver_method", "BDF")
+    rtol = float(params.get("solver_rtol", 1e-4))
+    atol = float(params.get("solver_atol", 1e-7))
+
+    if not show_progress:
+        return solve_ivp(
+            fun=ode_system,
+            t_span=t_span,
+            y0=y0,
+            args=(radius, params, mode),
+            t_eval=t_eval,
+            method=method,
+            rtol=rtol,
+            atol=atol,
+            max_step=max_step,
+        )
+
+    t0, tf = float(t_span[0]), float(t_span[1])
+    if tf <= t0:
+        raise ValueError("t_span must satisfy t_span[1] > t_span[0].")
+
+    n_chunks = max(1, int(progress_chunks))
+    chunk_edges = np.linspace(t0, tf, n_chunks + 1)
+
+    if t_eval is not None:
+        t_eval = np.asarray(t_eval, dtype=float)
+        if t_eval.ndim != 1:
+            raise ValueError("t_eval must be one-dimensional when provided.")
+
+    t_parts = []
+    y_parts = []
+    current_y = y0
+    success = True
+    message = "The solver successfully reached the end of the integration interval."
+    status = 0
+    nfev_total = njev_total = nlu_total = 0
+
+    print("Simulation progress: 0%", end="\r")
+    for idx in range(n_chunks):
+        left = chunk_edges[idx]
+        right = chunk_edges[idx + 1]
+
+        if t_eval is None:
+            t_eval_chunk = None
+        else:
+            if idx == 0:
+                mask = (t_eval >= left) & (t_eval <= right)
+            else:
+                mask = (t_eval > left) & (t_eval <= right)
+            t_eval_chunk = t_eval[mask]
+            if t_eval_chunk.size == 0:
+                t_eval_chunk = None
+
+        sol_chunk = solve_ivp(
+            fun=ode_system,
+            t_span=(left, right),
+            y0=current_y,
+            args=(radius, params, mode),
+            t_eval=t_eval_chunk,
+            method=method,
+            rtol=rtol,
+            atol=atol,
+            max_step=max_step,
+        )
+
+        nfev_total += int(getattr(sol_chunk, "nfev", 0))
+        njev_total += int(getattr(sol_chunk, "njev", 0))
+        nlu_total += int(getattr(sol_chunk, "nlu", 0))
+
+        if not sol_chunk.success:
+            success = False
+            message = sol_chunk.message
+            status = sol_chunk.status
+            break
+
+        current_y = sol_chunk.y[:, -1]
+
+        if sol_chunk.t.size > 0:
+            t_parts.append(sol_chunk.t)
+            y_parts.append(sol_chunk.y)
+
+        pct = int(round((idx + 1) * 100.0 / n_chunks))
+        print(f"Simulation progress: {pct}%", end="\r")
+
+    print("Simulation progress: 100%")
+
+    if len(t_parts) == 0:
+        t_out = np.array([t0])
+        y_out = y0[:, None]
+    else:
+        t_out = np.concatenate(t_parts)
+        y_out = np.hstack(y_parts)
+
+    return SimpleNamespace(
+        t=t_out,
+        y=y_out,
+        success=success,
+        message=message,
+        status=status,
+        nfev=nfev_total,
+        njev=njev_total,
+        nlu=nlu_total,
     )
