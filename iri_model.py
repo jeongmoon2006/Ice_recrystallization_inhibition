@@ -27,6 +27,42 @@ def _velocity_time_scale(params):
     raise ValueError("params['time_unit'] must be either 'ms' or 's'.")
 
 
+def _flux_divergence_upwind(f, v_r, radius):
+    """Return d(f*v)/dR using first-order upwind finite-volume fluxes.
+
+    Boundary condition is "open" with zero inflow:
+    - Left boundary (smallest R): if v>0 (inflow), flux=0; if v<0 (outflow), flux=v*f.
+    - Right boundary (largest R): if v<0 (inflow), flux=0; if v>0 (outflow), flux=v*f.
+    """
+    f = np.asarray(f, dtype=float)
+    v_r = np.asarray(v_r, dtype=float)
+    radius = np.asarray(radius, dtype=float)
+
+    n = len(radius)
+    if n < 2:
+        return np.zeros_like(f)
+
+    face_flux = np.zeros(n + 1, dtype=float)
+
+    left_v = v_r[0]
+    right_v = v_r[-1]
+    face_flux[0] = left_v * f[0] if left_v < 0.0 else 0.0
+    face_flux[-1] = right_v * f[-1] if right_v > 0.0 else 0.0
+
+    face_velocity = 0.5 * (v_r[:-1] + v_r[1:])
+    upwind_left = np.where(face_velocity >= 0.0, f[:-1], f[1:])
+    face_flux[1:n] = face_velocity * upwind_left
+
+    cell_width = np.empty(n, dtype=float)
+    cell_width[0] = radius[1] - radius[0]
+    cell_width[-1] = radius[-1] - radius[-2]
+    if n > 2:
+        cell_width[1:-1] = 0.5 * (radius[2:] - radius[:-2])
+    cell_width = np.maximum(cell_width, 1e-12)
+
+    return (face_flux[1:] - face_flux[:-1]) / cell_width
+
+
 def critical_radii(c_bulk, params):
     """Return (R_melt, R_freeze) for the two-threshold model.
 
@@ -71,6 +107,8 @@ def get_growth_velocity(R, c_bulk, params, mode="single"):
 
     time_scale = _velocity_time_scale(params)
     prefactor = D / (radius * rho_ice) / time_scale
+    
+    # Compute the baseline physical branch
     v_small_r = prefactor * (c_bulk - c_flat - alpha / radius + k_m * invL2)
 
     if mode == "single":
@@ -79,19 +117,32 @@ def get_growth_velocity(R, c_bulk, params, mode="single"):
     if mode != "double":
         raise ValueError("mode must be 'single' or 'double'.")
 
+    # Compute second branch and critical radii for double mode
     v_large_r = prefactor * (c_bulk - c_flat - alpha / radius - k_f * invL2)
     r_melt, r_freeze = critical_radii(c_bulk, params)
 
-    # Keep a true three-region piecewise structure:
-    #   R < r_melt   -> +k_m branch (small-radius branch)
-    #   r_melt <= R <= r_freeze -> stay region (v = 0)
-    #   R > r_freeze -> -k_f branch (large-radius branch)
-    # This mirrors the legacy notebook logic and preserves a finite stay window
-    # whenever r_melt < r_freeze.
-    in_large_r_region = radius > r_freeze
-    in_small_r_region = radius < r_melt
+    # --- [Integration point: smoothing logic] ---
+    # Check whether smoothing is enabled in params (accepts True, "yes", "y", etc.)
+    is_smooth = str(params.get("smooth", True )).lower() in ["true", "yes", "y"]
 
-    return np.select([in_large_r_region, in_small_r_region], [v_large_r, v_small_r], default=0.0)
+    if is_smooth:
+        # Guard against delta_r == 0 to avoid numerical issues
+        delta_r = max(float(params.get("smoothing_width", 0.5)), 1e-10)
+
+        # Smooth transition weights using hyperbolic tangent
+        # Active for radii below r_melt
+        weight_melt = 0.5 * (1 - np.tanh((radius - r_melt) / delta_r))
+        # Active for radii above r_freeze
+        weight_freeze = 0.5 * (1 + np.tanh((radius - r_freeze) / delta_r))
+        
+        # Blend velocities by weights (naturally tends toward 0 in the stay region)
+        return (weight_melt * v_small_r) + (weight_freeze * v_large_r)
+    
+    else:
+        # Original sharp piecewise selection
+        in_large_r_region = radius > r_freeze
+        in_small_r_region = radius < r_melt
+        return np.select([in_large_r_region, in_small_r_region], [v_large_r, v_small_r], default=0.0)
 
 
 def ode_system(t, y, R, params, mode):
@@ -99,11 +150,29 @@ def ode_system(t, y, R, params, mode):
     f = y[:-1]
     c_bulk = y[-1]
     rho_ice = params["rho_ice"]
+    grad_edge_order = int(params.get("gradient_edge_order", 1))
+    use_simpson = bool(params.get("use_simpson_integral", False))
+    flux_scheme = str(params.get("flux_scheme", "upwind")).lower()
+    enforce_nonnegative_f = bool(params.get("enforce_nonnegative_f", True))
 
     v_r = get_growth_velocity(R, c_bulk, params, mode=mode)
     flux = f * v_r
-    df_dt = -np.gradient(flux, R, edge_order=2)
-    dc_bulk_dt = -4.0 * np.pi * rho_ice * simpson(y=R * R * v_r * f, x=R)
+    if flux_scheme == "upwind":
+        df_dt = -_flux_divergence_upwind(f=f, v_r=v_r, radius=R)
+    elif flux_scheme == "gradient":
+        df_dt = -np.gradient(flux, R, edge_order=grad_edge_order)
+    else:
+        raise ValueError("params['flux_scheme'] must be 'upwind' or 'gradient'.")
+
+    if enforce_nonnegative_f:
+        df_dt = np.where((f <= 0.0) & (df_dt < 0.0), 0.0, df_dt)
+
+    integrand = R * R * v_r * f
+    if use_simpson:
+        integral_val = simpson(y=integrand, x=R)
+    else:
+        integral_val = np.trapezoid(integrand, R)
+    dc_bulk_dt = -4.0 * np.pi * rho_ice * integral_val
 
     return np.concatenate([df_dt, [dc_bulk_dt]])
 
@@ -129,13 +198,17 @@ def run_simulation(f_init, c_bulk_init, R, t_span, params, mode="double", t_eval
 
     y0 = np.concatenate([f_init, [float(c_bulk_init)]])
 
+    method = params.get("solver_method", "BDF")
+    rtol = float(params.get("solver_rtol", 1e-4))
+    atol = float(params.get("solver_atol", 1e-7))
+
     return solve_ivp(
         fun=ode_system,
         t_span=t_span,
         y0=y0,
         args=(radius, params, mode),
         t_eval=t_eval,
-        method="BDF",
-        rtol=1e-6,
-        atol=1e-9,
+        method=method,
+        rtol=rtol,
+        atol=atol,
     )
