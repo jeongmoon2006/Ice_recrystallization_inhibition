@@ -1,0 +1,10 @@
+Parameter,Value
+Extraction time (min),10.0418410041841
+c_bulk [number/µm³],31518361683.393887
+c_flat [number/µm³],31516663462.991917
+"r_c,melt (µm)",8.739173967459324
+"r_c,freeze (µm)",10.986357947434293
+α [number/µm²],15482076.956983458
+k_m*L^-2 [number/µm³],73351.7185338831
+k_f*L^-2 [number/µm³],289011.17803423083
+Ratio k_f/k_m,3.9400737134840123
